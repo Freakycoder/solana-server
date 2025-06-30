@@ -1,42 +1,38 @@
-use axum::{
-    response::Json as ResponseJson,
-    routing::post,
-    Router,
-};
-use solana_sdk::signature::{Keypair, Signer};
+use axum::{routing::post, Router};
 use tower_http::cors::CorsLayer;
 
-pub mod routes;
-pub mod types;
-
-use crate::types::response::{ApiResponse, KeypairResponse};
-
-async fn handle_keypair_generation() -> ResponseJson<ApiResponse<KeypairResponse>> {
-    let new_keypair = Keypair::new();
-    let response_data = KeypairResponse {
-        pubkey: new_keypair.pubkey().to_string(),
-        secret: bs58::encode(new_keypair.to_bytes()).into_string(),
-    };
-
-    ResponseJson(ApiResponse::success(response_data))
-}
+mod routes;
+mod types;
+mod utils;
 
 #[tokio::main]
 async fn main() {
-    println!("Starting Solana HTTP server...");
+    println!("🚀 Starting Solana HTTP server...");
 
     let app = Router::new()
-        .route("/keypair", post(handle_keypair_generation))
-        .nest("/token", routes::token::token_router())
-        .nest("/message", routes::message::message_router())
-        .nest("/send", routes::send::send_router())
+        .route("/keypair", post(routes::keypair::handle_keypair_generation))
+        .route("/token/create", post(routes::token::handle_token_creation))
+        .route("/token/mint", post(routes::token::handle_token_minting))
+        .route("/message/sign", post(routes::message::handle_message_signing))
+        .route("/message/verify", post(routes::message::handle_message_verification))
+        .route("/send/sol", post(routes::send::handle_sol_transfer))
+        .route("/send/token", post(routes::send::handle_token_transfer))
         .layer(CorsLayer::permissive());
+
+    println!("📍 Available endpoints:");
+    println!("  POST /keypair");
+    println!("  POST /token/create");
+    println!("  POST /token/mint");
+    println!("  POST /message/sign");
+    println!("  POST /message/verify");
+    println!("  POST /send/sol");
+    println!("  POST /send/token");
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000")
         .await
         .expect("Failed to bind to port 3000");
 
-    println!("🚀 Server running on http://127.0.0.1:3000");
+    println!("🔥 Server running on http://127.0.0.1:3000");
 
     axum::serve(listener, app).await.expect("Server crashed");
 }
