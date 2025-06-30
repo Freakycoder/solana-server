@@ -1,4 +1,4 @@
-## 🚀 Note for Reviewers
+##  Note for Reviewers
 
 While not all tests in this repository are currently passing, I kindly invite you to check out my other project where I’ve built a **decentralized uptime monitoring platform**.
 
