@@ -1,6 +1,6 @@
 ##  Note for Reviewers
 
-While not all tests in this repository are currently passing, I urge you to check out my other project where I’ve built a **decentralized uptime monitoring platform**.
+While not all tests in this repository are currently passing, I urge you to check out my other project where I’ve built a **decentralized uptime monitoring platform**. (https://github.com/Freakycoder/iot-depin)
 
 I’m genuinely passionate about **Web3** and excited about building meaningful tools in this space.
 
