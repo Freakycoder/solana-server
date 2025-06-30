@@ -1,55 +1,79 @@
-use crate::types::{
-    instruction::{AccountData, InstructionResponse},
-    response::ApiResponse,
-    token::{TokenCreateRequest, TokenMintRequest},
-};
-use axum::{
-    extract::Json,
-    response::Json as ResponseJson,
-    routing::post,
-    Router,
-};
-use base64::{engine::general_purpose, Engine as _};
-use solana_sdk::{instruction::Instruction, pubkey::Pubkey};
+use axum::response::Json as ResponseJson;
+use serde::Deserialize;
 use spl_token::instruction::{initialize_mint, mint_to};
-use std::str::FromStr;
 
-pub fn token_router() -> Router {
-    Router::new()
-        .route("/create", post(handle_token_creation))
-        .route("/mint", post(handle_token_minting))
+use crate::{
+    types::{
+        request::{SafeJson, get_required_string, get_required_u64, get_required_u8},
+        response::{ApiResponse, InstructionResponse},
+    },
+    utils::{validate_pubkey, convert_instruction_to_response, validate_amount, validate_decimals},
+};
+
+#[derive(Deserialize, Debug)]
+pub struct TokenCreateRequest {
+    #[serde(rename = "mintAuthority")]
+    pub mint_authority: Option<String>,
+    pub mint: Option<String>,
+    pub decimals: Option<u8>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct TokenMintRequest {
+    pub mint: Option<String>,
+    pub destination: Option<String>,
+    pub authority: Option<String>,
+    pub amount: Option<u64>,
 }
 
 pub async fn handle_token_creation(
-    Json(req): Json<TokenCreateRequest>,
+    SafeJson(payload): SafeJson<TokenCreateRequest>,
 ) -> ResponseJson<ApiResponse<InstructionResponse>> {
-    if req.mint_authority.trim().is_empty() || req.mint.trim().is_empty() {
-        return ResponseJson(ApiResponse::error("Missing required fields".to_string()));
-    }
+    println!("🔥 TOKEN CREATE endpoint called with: {:?}", payload);
 
-    if req.decimals > 9 {
-        return ResponseJson(ApiResponse::error("Invalid decimals: must be between 0 and 9".to_string()));
-    }
+    let req = match payload {
+        Some(req) => req,
+        None => {
+            return ResponseJson(ApiResponse::error("Missing required fields".to_string()));
+        }
+    };
 
-    let mint_auth = match validate_pubkey(&req.mint_authority) {
+    let mint_authority = match get_required_string(req.mint_authority, "mintAuthority") {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
+
+    let mint = match get_required_string(req.mint, "mint") {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
+
+    let decimals = match get_required_u8(req.decimals, "decimals") {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
+
+    let validated_decimals = match validate_decimals(decimals) {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
+
+    let mint_authority_pk = match validate_pubkey(&mint_authority) {
         Ok(pk) => pk,
         Err(e) => return ResponseJson(ApiResponse::error(e)),
     };
 
-    let mint_pubkey = match validate_pubkey(&req.mint) {
+    let mint_pk = match validate_pubkey(&mint) {
         Ok(pk) => pk,
         Err(e) => return ResponseJson(ApiResponse::error(e)),
     };
-
-    if mint_pubkey == mint_auth {
-    }
 
     let instruction = match initialize_mint(
         &spl_token::id(),
-        &mint_pubkey,
-        &mint_auth,
-        Some(&mint_auth), 
-        req.decimals,
+        &mint_pk,
+        &mint_authority_pk,
+        Some(&mint_authority_pk),
+        validated_decimals,
     ) {
         Ok(ix) => ix,
         Err(_) => {
@@ -57,47 +81,69 @@ pub async fn handle_token_creation(
         }
     };
 
-    let resp_data = convert_instruction(instruction);
-    ResponseJson(ApiResponse::success(resp_data))
+    let response = convert_instruction_to_response(instruction);
+    ResponseJson(ApiResponse::success(response))
 }
 
 pub async fn handle_token_minting(
-    Json(req): Json<TokenMintRequest>,
+    SafeJson(payload): SafeJson<TokenMintRequest>,
 ) -> ResponseJson<ApiResponse<InstructionResponse>> {
-    if req.mint.trim().is_empty() || req.destination.trim().is_empty() || req.authority.trim().is_empty() {
-        return ResponseJson(ApiResponse::error("Missing required fields".to_string()));
-    }
+    println!("🔥 TOKEN MINT endpoint called with: {:?}", payload);
 
-    if req.amount == 0 {
-        return ResponseJson(ApiResponse::error("Invalid amount: must be greater than 0".to_string()));
-    }
+    let req = match payload {
+        Some(req) => req,
+        None => {
+            return ResponseJson(ApiResponse::error("Missing required fields".to_string()));
+        }
+    };
 
-    if req.amount > u64::MAX / 2 {
-        return ResponseJson(ApiResponse::error("Invalid amount: amount too large".to_string()));
-    }
+    let mint = match get_required_string(req.mint, "mint") {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
 
-    let mint = match validate_pubkey(&req.mint) {
+    let destination = match get_required_string(req.destination, "destination") {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
+
+    let authority = match get_required_string(req.authority, "authority") {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
+
+    let amount = match get_required_u64(req.amount, "amount") {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
+
+    let validated_amount = match validate_amount(amount, Some(u64::MAX / 2)) {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
+
+    let mint_pk = match validate_pubkey(&mint) {
         Ok(pk) => pk,
         Err(e) => return ResponseJson(ApiResponse::error(e)),
     };
 
-    let dest = match validate_pubkey(&req.destination) {
+    let destination_pk = match validate_pubkey(&destination) {
         Ok(pk) => pk,
         Err(e) => return ResponseJson(ApiResponse::error(e)),
     };
 
-    let authority = match validate_pubkey(&req.authority) {
+    let authority_pk = match validate_pubkey(&authority) {
         Ok(pk) => pk,
         Err(e) => return ResponseJson(ApiResponse::error(e)),
     };
 
     let instruction = match mint_to(
         &spl_token::id(),
-        &mint,
-        &dest,
-        &authority,
-        &[], 
-        req.amount,
+        &mint_pk,
+        &destination_pk,
+        &authority_pk,
+        &[],
+        validated_amount,
     ) {
         Ok(ix) => ix,
         Err(_) => {
@@ -105,45 +151,6 @@ pub async fn handle_token_minting(
         }
     };
 
-    let resp_data = convert_instruction(instruction);
-    ResponseJson(ApiResponse::success(resp_data))
-}
-
-pub fn validate_pubkey(pubkey_str: &str) -> Result<Pubkey, String> {
-    let trimmed = pubkey_str.trim();
-    if trimmed.is_empty() {
-        return Err("Invalid public key: empty or whitespace".to_string());
-    }
-
-    if trimmed.len() < 32 || trimmed.len() > 50 {
-        return Err(format!("Invalid public key: {}", pubkey_str));
-    }
-
-    match Pubkey::from_str(trimmed) {
-        Ok(pk) => {
-            if pk == Pubkey::default() {
-                return Err("Invalid public key: cannot use default pubkey".to_string());
-            }
-            Ok(pk)
-        }
-        Err(_) => Err(format!("Invalid public key: {}", pubkey_str)),
-    }
-}
-
-pub fn convert_instruction(inst: Instruction) -> InstructionResponse {
-    let account_list: Vec<AccountData> = inst
-        .accounts
-        .iter()
-        .map(|acc| AccountData {
-            pubkey: acc.pubkey.to_string(),
-            is_signer: acc.is_signer,
-            is_writable: acc.is_writable,
-        })
-        .collect();
-
-    InstructionResponse {
-        program_id: inst.program_id.to_string(),
-        accounts: account_list,
-        instruction_data: general_purpose::STANDARD.encode(&inst.data),
-    }
+    let response = convert_instruction_to_response(instruction);
+    ResponseJson(ApiResponse::success(response))
 }
