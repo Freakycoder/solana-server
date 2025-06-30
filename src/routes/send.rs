@@ -1,122 +1,160 @@
-use axum::{
-    extract::Json,
-    response::Json as ResponseJson,
-    routing::post,
-    Router,
-};
+use axum::response::Json as ResponseJson;
 use base64::{engine::general_purpose, Engine as _};
-use solana_sdk::{pubkey::Pubkey, system_instruction};
+use serde::Deserialize;
+use solana_sdk::system_instruction;
 use spl_associated_token_account::get_associated_token_address;
 use spl_token::instruction::transfer;
 
 use crate::{
-    routes::token::validate_pubkey,
     types::{
-        instruction::{SolSendRequest, TokenSendRequest, SolTransferResponse, TokenTransferResponse, TokenTransferAccount},
-        response::ApiResponse,
+        request::{SafeJson, get_required_string, get_required_u64},
+        response::{ApiResponse, SolTransferResponse, TokenTransferResponse, TokenTransferAccount},
     },
+    utils::{validate_pubkey, validate_amount},
 };
 
-pub fn send_router() -> Router {
-    Router::new()
-        .route("/sol", post(handle_sol_transfer))
-        .route("/token", post(handle_token_transfer))
+#[derive(Deserialize, Debug)]
+pub struct SolSendRequest {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub lamports: Option<u64>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct TokenSendRequest {
+    pub destination: Option<String>,
+    pub mint: Option<String>,
+    pub owner: Option<String>,
+    pub amount: Option<u64>,
 }
 
 pub async fn handle_sol_transfer(
-    Json(req): Json<SolSendRequest>,
+    SafeJson(payload): SafeJson<SolSendRequest>,
 ) -> ResponseJson<ApiResponse<SolTransferResponse>> {
-    if req.from.trim().is_empty() || req.to.trim().is_empty() {
-        return ResponseJson(ApiResponse::error("Missing required fields".to_string()));
-    }
+    println!("🔥 SEND SOL endpoint called with: {:?}", payload);
 
-    if req.lamports == 0 {
-        return ResponseJson(ApiResponse::error("Invalid amount: must be greater than 0".to_string()));
-    }
+    let req = match payload {
+        Some(req) => req,
+        None => {
+            return ResponseJson(ApiResponse::error("Missing required fields".to_string()));
+        }
+    };
 
-    if req.lamports > 1_000_000_000 * 1_000_000_000 {
-        return ResponseJson(ApiResponse::error("Invalid amount: amount too large".to_string()));
-    }
+    let from = match get_required_string(req.from, "from") {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
 
-    let from_pubkey = match validate_pubkey(&req.from) {
+    let to = match get_required_string(req.to, "to") {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
+
+    let lamports = match get_required_u64(req.lamports, "lamports") {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
+
+    let validated_lamports = match validate_amount(lamports, Some(1_000_000_000 * 1_000_000_000)) {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
+
+    let from_pk = match validate_pubkey(&from) {
         Ok(pk) => pk,
         Err(e) => return ResponseJson(ApiResponse::error(e)),
     };
 
-    let to_pubkey = match validate_pubkey(&req.to) {
+    let to_pk = match validate_pubkey(&to) {
         Ok(pk) => pk,
         Err(e) => return ResponseJson(ApiResponse::error(e)),
     };
 
-    if from_pubkey == to_pubkey {
-    }
+    let instruction = system_instruction::transfer(&from_pk, &to_pk, validated_lamports);
 
-    let transfer_ix = system_instruction::transfer(&from_pubkey, &to_pubkey, req.lamports);
-
-    let resp_data = SolTransferResponse {
-        program_id: transfer_ix.program_id.to_string(),
-        accounts: transfer_ix.accounts.iter().map(|acc| acc.pubkey.to_string()).collect(),
-        instruction_data: general_purpose::STANDARD.encode(&transfer_ix.data),
+    let response = SolTransferResponse {
+        program_id: instruction.program_id.to_string(),
+        accounts: instruction.accounts.iter().map(|acc| acc.pubkey.to_string()).collect(),
+        instruction_data: general_purpose::STANDARD.encode(&instruction.data),
     };
 
-    ResponseJson(ApiResponse::success(resp_data))
+    ResponseJson(ApiResponse::success(response))
 }
 
 pub async fn handle_token_transfer(
-    Json(req): Json<TokenSendRequest>,
+    SafeJson(payload): SafeJson<TokenSendRequest>,
 ) -> ResponseJson<ApiResponse<TokenTransferResponse>> {
-    if req.destination.trim().is_empty() || req.mint.trim().is_empty() || req.owner.trim().is_empty() {
-        return ResponseJson(ApiResponse::error("Missing required fields".to_string()));
-    }
+    println!("🔥 SEND TOKEN endpoint called with: {:?}", payload);
 
-    if req.amount == 0 {
-        return ResponseJson(ApiResponse::error("Invalid amount: must be greater than 0".to_string()));
-    }
+    let req = match payload {
+        Some(req) => req,
+        None => {
+            return ResponseJson(ApiResponse::error("Missing required fields".to_string()));
+        }
+    };
 
-    if req.amount > u64::MAX / 2 {
-        return ResponseJson(ApiResponse::error("Invalid amount: amount too large".to_string()));
-    }
+    let destination = match get_required_string(req.destination, "destination") {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
 
-    let mint = match validate_pubkey(&req.mint) {
+    let mint = match get_required_string(req.mint, "mint") {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
+
+    let owner = match get_required_string(req.owner, "owner") {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
+
+    let amount = match get_required_u64(req.amount, "amount") {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
+
+    let validated_amount = match validate_amount(amount, Some(u64::MAX / 2)) {
+        Ok(val) => val,
+        Err(e) => return ResponseJson(ApiResponse::error(e)),
+    };
+
+    let destination_pk = match validate_pubkey(&destination) {
         Ok(pk) => pk,
         Err(e) => return ResponseJson(ApiResponse::error(e)),
     };
 
-    let owner = match validate_pubkey(&req.owner) {
+    let mint_pk = match validate_pubkey(&mint) {
         Ok(pk) => pk,
         Err(e) => return ResponseJson(ApiResponse::error(e)),
     };
 
-    let destination = match validate_pubkey(&req.destination) {
+    let owner_pk = match validate_pubkey(&owner) {
         Ok(pk) => pk,
         Err(e) => return ResponseJson(ApiResponse::error(e)),
     };
 
-    if owner == destination {
-    }
-
-    let source_token_account = get_associated_token_address(&owner, &mint);
-    let dest_token_account = get_associated_token_address(&destination, &mint);
+    let source_token_account = get_associated_token_address(&owner_pk, &mint_pk);
+    let dest_token_account = get_associated_token_address(&destination_pk, &mint_pk);
 
     if source_token_account == dest_token_account {
         return ResponseJson(ApiResponse::error("Cannot transfer to the same token account".to_string()));
     }
 
-    let transfer_ix = match transfer(
+    let instruction = match transfer(
         &spl_token::id(),
         &source_token_account,
         &dest_token_account,
-        &owner,
-        &[], 
-        req.amount,
+        &owner_pk,
+        &[],
+        validated_amount,
     ) {
-        Ok(instruction) => instruction,
+        Ok(ix) => ix,
         Err(_) => {
             return ResponseJson(ApiResponse::error("Failed to create transfer instruction".to_string()));
         }
     };
 
-    let accounts = transfer_ix
+    let accounts = instruction
         .accounts
         .iter()
         .map(|acc| TokenTransferAccount {
@@ -125,11 +163,11 @@ pub async fn handle_token_transfer(
         })
         .collect();
 
-    let resp_data = TokenTransferResponse {
-        program_id: transfer_ix.program_id.to_string(),
+    let response = TokenTransferResponse {
+        program_id: instruction.program_id.to_string(),
         accounts,
-        instruction_data: general_purpose::STANDARD.encode(&transfer_ix.data),
+        instruction_data: general_purpose::STANDARD.encode(&instruction.data),
     };
 
-    ResponseJson(ApiResponse::success(resp_data))
+    ResponseJson(ApiResponse::success(response))
 }
